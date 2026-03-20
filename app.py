@@ -569,7 +569,7 @@ def app_main():
     st.markdown("---")
 
     # ── Navigation tabs ──
-    tab_home, tab_post, tab_myads = st.tabs(["🏠 Browse", "📢 Post an Ad", "📦 My Ads"])
+    tab_home, tab_post, tab_want, tab_myads = st.tabs(["🏠 Browse", "📢 Post an Ad", "🙋 Want to Buy", "📦 My Ads"])
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 1 — HOME FEED
@@ -676,8 +676,102 @@ def app_main():
                 })
                 st.success("✅ Your ad has been posted! It will appear on the home feed shortly.")
 
+
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 3 — MY ADS
+    # TAB 3 — WANT TO BUY
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_want:
+        st.markdown("### 🙋 Want to Buy")
+        st.caption("Looking for something? Post your requirement and let sellers contact you!")
+
+        with st.form("want_form", clear_on_submit=True):
+            want_title    = st.text_input("What are you looking for? ✱", placeholder="e.g. Physics Textbook, Cycle, Mini Fridge")
+            want_category = st.selectbox("Category ✱", CATEGORIES[1:])
+            want_budget   = st.text_input("Your Budget (optional)", value="₹", placeholder="₹ 0")
+            want_desc     = st.text_area("More details (optional)", placeholder="Edition, condition, urgency…", height=100)
+            want_phone    = st.text_input("Your WhatsApp Number ✱", placeholder="10-digit mobile number")
+            want_submit   = st.form_submit_button("Post Requirement 🙋", type="primary", use_container_width=True)
+
+        if want_submit:
+            want_budget_clean = want_budget.replace("₹","").strip()
+            phone_digits = re.sub(r"[^0-9]","",want_phone)
+            if not want_title:
+                st.error("Please describe what you are looking for.")
+            elif len(phone_digits) != 10:
+                st.error("Enter a valid 10-digit WhatsApp number.")
+            else:
+                db.collection("requirements").add({
+                    "title":       want_title.strip(),
+                    "category":    want_category,
+                    "budget":      want_budget_clean,
+                    "description": want_desc.strip(),
+                    "buyer_name":  st.session_state.user_name,
+                    "buyer_email": st.session_state.user_email,
+                    "phone":       phone_digits,
+                    "fulfilled":   False,
+                    "created":     datetime.utcnow(),
+                })
+                st.success("Your requirement has been posted! Sellers will contact you on WhatsApp.")
+
+        st.markdown("---")
+        st.markdown("### All Requirements")
+
+        want_search = st.text_input("Search requirements…", placeholder="Search…", key="want_search")
+
+        req_docs = db.collection("requirements").stream()
+        requirements = []
+        for doc in req_docs:
+            d = doc.to_dict()
+            d["doc_id"] = doc.id
+            requirements.append(d)
+        requirements = sorted(requirements, key=lambda x: x.get("created",""), reverse=True)
+
+        if want_search:
+            qs = want_search.lower()
+            requirements = [r for r in requirements if qs in r.get("title","").lower()]
+
+        if not requirements:
+            st.info("No requirements posted yet. Be the first!")
+        else:
+            req_cols = st.columns(2)
+            for i, r in enumerate(requirements):
+                with req_cols[i % 2]:
+                    wa_link = whatsapp_url(r.get("phone",""), r.get("title",""))
+                    is_done = r.get("fulfilled", False)
+                    border_color = "#ccc" if is_done else "#FF6B00"
+                    op = "0.5" if is_done else "1"
+                    budget_html = ""
+                    if r.get("budget",""):
+                        budget_html = f'<div style="font-size:.9rem;color:#FF6B00;font-weight:700;">Budget: \u20b9{r.get("budget","")}</div>'
+                    status_badge = '<span style="background:#ccc;color:#555;font-size:.68rem;font-weight:700;padding:2px 10px;border-radius:20px;">FULFILLED</span>' if is_done else '<span style="background:#FFF0E5;color:#FF6B00;font-size:.68rem;font-weight:700;padding:2px 10px;border-radius:20px;border:1px solid #FFD0AA;">LOOKING</span>'
+                    cat_badge = f'<span style="background:#FFF0E5;color:#FF6B00;font-size:.7rem;font-weight:600;padding:2px 10px;border-radius:20px;margin-left:4px">{r.get("category","")}</span>'
+                    desc_text = r.get("description","")[:100]
+                    if len(r.get("description","")) > 100:
+                        desc_text += "…"
+                    card_html = f"""<div style="background:white;border:2px solid {border_color};border-radius:14px;padding:1rem;margin-bottom:.5rem;opacity:{op}">
+{status_badge}{cat_badge}
+<div style="font-weight:700;font-size:1rem;margin:.4rem 0">{r.get("title","")}</div>
+{budget_html}
+<div style="font-size:.82rem;color:#555;margin:.3rem 0">{desc_text}</div>
+<div style="font-size:.78rem;color:#888;">👤 {r.get("buyer_name","")}</div>
+<a class="wa-btn" href="{wa_link}" target="_blank">💬 I Can Help!</a>
+</div>"""
+                    st.markdown(card_html, unsafe_allow_html=True)
+
+                    if r.get("buyer_email","") == st.session_state.user_email:
+                        btn_label = "✅ Mark as Fulfilled" if not is_done else "🔄 Still Looking"
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button(btn_label, key=f"req_{r['doc_id']}", use_container_width=True):
+                                db.collection("requirements").document(r["doc_id"]).update({"fulfilled": not is_done})
+                                st.rerun()
+                        with c2:
+                            if st.button("🗑️ Delete", key=f"del_req_{r['doc_id']}", use_container_width=True):
+                                db.collection("requirements").document(r["doc_id"]).delete()
+                                st.rerun()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 4 — MY ADS
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_myads:
         st.markdown("### 📦 My Ads")
