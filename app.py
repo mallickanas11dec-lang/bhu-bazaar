@@ -435,6 +435,19 @@ hr { border: none !important; border-top: 1.5px solid var(--border) !important; 
 }
 .wa-btn:hover { background: #158F4E; transform: translateY(-1px); color: white !important; }
 
+/* Share button */
+.share-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #25D366; color: white !important;
+    padding: 8px 16px; border-radius: 100px;
+    font-size: 0.80rem !important; font-weight: 600 !important;
+    font-family: 'DM Sans', sans-serif !important;
+    text-decoration: none !important; margin-top: 10px; margin-left: 8px;
+    transition: background 0.2s, transform 0.15s;
+    box-shadow: 0 2px 10px rgba(37,211,102,0.25);
+}
+.share-btn:hover { background: #1ebe5d; transform: translateY(-1px); color: white !important; }
+
 /* Form card */
 .bb-form-card {
     background: var(--surface); border: 1.5px solid var(--border);
@@ -529,9 +542,15 @@ for key, default in {
     "fp_otp_expiry": None,
     "fp_verified":   False,
     "show_forgot":   False,
+    "shared_ad_id":  "",
+    "show_auth":     False,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
+
+# Capture shared ad deep-link
+if "ad" in st.query_params and not st.session_state.shared_ad_id:
+    st.session_state.shared_ad_id = st.query_params["ad"]
 
 # Persist login via URL params
 params = st.query_params
@@ -558,6 +577,12 @@ def whatsapp_url(phone: str, item_title: str) -> str:
     if not clean.startswith("91"): clean = "91" + clean
     msg = f"Hi, I saw your ad for *{item_title}* on BHU Bazaar. Is it still available?"
     return f"https://wa.me/{clean}?text={urllib.parse.quote(msg)}"
+
+def share_whatsapp_url(doc_id: str, title: str, price: str, image_url: str) -> str:
+    import urllib.parse
+    ad_link = f"https://bhu-baazar.streamlit.app/?ad={doc_id}"
+    msg = f"Check out *{title}* for ₹{price} on BHU Bazaar: {ad_link}"
+    return f"https://wa.me/?text={urllib.parse.quote(msg)}"
 
 def get_email_creds():
     try:    return st.secrets["email"]["sender"], st.secrets["email"]["password"]
@@ -660,7 +685,13 @@ def product_card(p: dict, show_manage: bool = False):
     if p.get("image_url"):
         img_html = f'<img class="bb-card-img" src="{p["image_url"]}" onerror="this.style.display=\'none\'">'
 
-    wa_url  = whatsapp_url(p.get("phone",""), p.get("title",""))
+    wa_url     = whatsapp_url(p.get("phone",""), p.get("title",""))
+    share_url  = share_whatsapp_url(
+                     p.get("doc_id",""),
+                     p.get("title",""),
+                     p.get("price",""),
+                     p.get("image_url","")
+                 )
     desc    = p.get("description","")[:112]
     if len(p.get("description","")) > 112: desc += "…"
     hostel  = p.get("seller_hostel","")
@@ -677,6 +708,7 @@ def product_card(p: dict, show_manage: bool = False):
           <span>👤 {p.get("seller_name","")}</span>{hostel_html}
         </div>
         <a class="wa-btn" href="{wa_url}" target="_blank">💬 Chat on WhatsApp</a>
+        <a class="share-btn" href="{share_url}" target="_blank">📤 Share Ad</a>
     </div>""", unsafe_allow_html=True)
 
     if show_manage:
@@ -899,14 +931,27 @@ def page_forgot_password():
 
 # ── MAIN APP ──────────────────────────────────────────────────────────────────
 def app_main():
-    render_header(show_user=True)
+    render_header(show_user=st.session_state.logged_in)
 
     _, col_out = st.columns([7, 1])
     with col_out:
-        if st.button("Sign Out"):
-            for k in ["logged_in","user_email","user_name"]:
-                st.session_state[k] = False if k == "logged_in" else ""
-            st.query_params.clear(); st.rerun()
+        if st.session_state.logged_in:
+            if st.button("Sign Out"):
+                for k in ["logged_in","user_email","user_name"]:
+                    st.session_state[k] = False if k == "logged_in" else ""
+                st.query_params.clear(); st.rerun()
+        else:
+            if st.button("🔑 Sign In / Register"):
+                st.session_state["show_auth"] = True
+                st.rerun()
+
+    # Show login/register modal for guests who clicked Sign In
+    if st.session_state.get("show_auth") and not st.session_state.logged_in:
+        with st.expander("🔑 Sign In or Register", expanded=True):
+            t1, t2 = st.tabs(["Sign In", "Register"])
+            with t1: page_login()
+            with t2: page_register()
+        st.stop()
 
     tab_home, tab_post, tab_want, tab_myads = st.tabs(
         ["🏠  Browse", "📢  Post an Ad", "🙋  Want to Buy", "📦  My Ads"]
@@ -922,6 +967,26 @@ def app_main():
             d = doc.to_dict(); d["doc_id"] = doc.id; products.append(d)
         products = sorted(products, key=lambda x: x.get("created",""), reverse=True)
         products = sorted(products, key=lambda x: (not x.get("featured"), x.get("sold")))
+
+        # ── Shared ad deep-link: highlight the specific ad ──────────────────
+        shared_id = st.session_state.get("shared_ad_id", "")
+        if shared_id:
+            shared_ad = next((p for p in products if p.get("doc_id") == shared_id), None)
+            if shared_ad:
+                st.markdown("""
+                <div style="background:linear-gradient(135deg,#FFF1E8,#FFF8E1);
+                            border:2px solid #F55D00;border-radius:16px;
+                            padding:14px 20px;margin-bottom:1.2rem;
+                            display:flex;align-items:center;gap:10px;">
+                  <span style="font-size:1.4rem;">📤</span>
+                  <span style="font-size:0.9rem;font-weight:600;color:#F55D00;">
+                    Someone shared this ad with you! Scroll down or it's shown first below.
+                  </span>
+                </div>""", unsafe_allow_html=True)
+                product_card(shared_ad)
+                st.markdown("<hr>", unsafe_allow_html=True)
+            st.session_state.shared_ad_id = ""  # clear after showing
+        # ────────────────────────────────────────────────────────────────────
 
         total  = len(products)
         active = sum(1 for p in products if not p.get("sold"))
@@ -960,6 +1025,23 @@ def app_main():
     # TAB 2 — POST AN AD
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_post:
+        if not st.session_state.logged_in:
+            st.markdown("""
+            <div style="background:linear-gradient(135deg,#FFF1E8,#FFF8E1);
+                        border:2px solid #F55D00;border-radius:16px;
+                        padding:2rem;text-align:center;margin-top:1rem;">
+              <div style="font-size:2.5rem;margin-bottom:12px;">🔐</div>
+              <div style="font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:700;
+                          color:#F55D00;margin-bottom:8px;">Login Required to Post an Ad</div>
+              <div style="font-size:.85rem;color:#8A7A6A;">
+                Please sign in or register to publish your listing.
+              </div>
+            </div>""", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            t1, t2 = st.tabs(["Sign In", "Register"])
+            with t1: page_login()
+            with t2: page_register()
+            st.stop()
         st.markdown('<div class="bb-section-head">📢 Post a New Ad</div>', unsafe_allow_html=True)
         st.markdown('<div class="bb-section-sub">Fields marked ✱ are required.</div>', unsafe_allow_html=True)
         st.markdown('<div class="bb-form-card">', unsafe_allow_html=True)
@@ -1108,6 +1190,23 @@ def app_main():
     # TAB 4 — MY ADS
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_myads:
+        if not st.session_state.logged_in:
+            st.markdown("""
+            <div style="background:linear-gradient(135deg,#FFF1E8,#FFF8E1);
+                        border:2px solid #F55D00;border-radius:16px;
+                        padding:2rem;text-align:center;margin-top:1rem;">
+              <div style="font-size:2.5rem;margin-bottom:12px;">🔐</div>
+              <div style="font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:700;
+                          color:#F55D00;margin-bottom:8px;">Login Required</div>
+              <div style="font-size:.85rem;color:#8A7A6A;">
+                Sign in to view and manage your listings.
+              </div>
+            </div>""", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            t1, t2 = st.tabs(["Sign In", "Register"])
+            with t1: page_login()
+            with t2: page_register()
+            st.stop()
         st.markdown('<div class="bb-section-head">📦 My Listings</div>', unsafe_allow_html=True)
         if st.session_state.pop("deleted_ad", False):
             st.success("✅ Ad deleted successfully.")
@@ -1143,14 +1242,10 @@ def app_main():
 
 # ── ENTRY POINT ───────────────────────────────────────────────────────────────
 def main():
-    if st.session_state.logged_in:
-        app_main()
-    elif st.session_state.show_forgot:
+    if st.session_state.show_forgot:
         page_forgot_password()
     else:
-        t1, t2 = st.tabs(["🔑  Sign In", "✍️  Register"])
-        with t1: page_login()
-        with t2: page_register()
+        app_main()
 
 if __name__ == "__main__":
     main()
